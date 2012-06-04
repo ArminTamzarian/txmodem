@@ -67,7 +67,7 @@ class UnexpectedSignalException(ExceptionTXMODEM):
 
 class TXMODEM:
     """
-    A Python class implementing the XMODEM send protocol built on top of PySerial.
+    A Python class implementing the XMODEM and XMODEM-CRC send protocol built on top of PySerial.
     """
     
     _SIGNAL_SOH = chr(1)
@@ -75,6 +75,7 @@ class TXMODEM:
     _SIGNAL_ACK = chr(6)
     _SIGNAL_NAK = chr(21)
     _SIGNAL_CAN = chr(24)
+    _SIGNAL_CRC16 = chr(67)
     
     _BLOCK_SIZE = 128
     
@@ -89,6 +90,9 @@ class TXMODEM:
                      }
 
     _port = None
+    _checksum = None
+    
+    _callback_update = None
     
     def __init__(self, **configuration):
         """
@@ -101,6 +105,9 @@ class TXMODEM:
         for k, v in configuration.items():
             self._configuration[k] = v
     
+    def set_callback_update(self, callback):
+        self._callback_update = callback        
+        
     def send(self, filename):
         """
         """
@@ -118,39 +125,63 @@ class TXMODEM:
         
         try:
             self._port = Serial(**self._configuration)
+        except ValueError:
+            raise ConfigurationException("Invalid value for configuration parameters.")
+        except SerialException:
+            raise ConfigurationException("Unable to open serial device '%s' with specified parameters." % (configuration["port"]))
+
+        try:            
             self._port.flush()
-            
             self._execute_communication(self._initiate_transmission, "Unable to receive initial NAK.")            
 
-            for i in range(1, int(math.ceil(os.path.getsize(filename) / self._BLOCK_SIZE)) + 1):
+            num_blocks = int(math.ceil(os.path.getsize(filename) / self._BLOCK_SIZE))
+            
+            for i in range(1,  num_blocks + 1):
                 block = input_file.read(self._BLOCK_SIZE)
                 if block:
                     if len(block) < self._BLOCK_SIZE:
                         block += chr(0) * (self._BLOCK_SIZE - len(block))
                         
-                    self._execute_communication(self._transmit_block, "Maximum number of transmission retries exceeded.", **{"block_index":i, "block":block})
-    
+                    self._transmit_block(i, block)
+                    
+                    if self._callback_update is not None:
+                        self._callback_update("Transmitting block %d of %d" % (i, num_blocks))
+                        
             self._execute_communication(self._terminate_transmission, "Maximum number of termination retries exceeded.")
             
         except IOError:
             raise ConfigurationException("Unexpected IO error.")
-        except ValueError:
-            raise ConfigurationException("Invalid value for configuration parameters.")
-        except SerialException:
-            raise ConfigurationException("Unable to open serial device '%s' with specified parameters." % (configuration["port"]))
         finally:
-            self._shutdown()        
-
+            self._shutdown()
+                  
+    def _crc_8(self, block):
+        return chr(sum(map(ord, block)) & 0xFF)
+    
+    def _crc_16(self, block):
+        crc = 0
+        for b in block:
+            crc = crc ^ (ord(b) << 8)
+            for i in range(8):
+                if crc & 0x8000:
+                    crc = (crc << 1) ^ 0x1021
+                else:
+                    crc = crc << 1
+        return "%c%c" % ((crc >> 8) & 0xFF, crc & 0xFF)
+             
     def _wait_for_signal(self, signal):
         """
         """
         while True:
             buffer = self._port.read()
+            while self._port.inWaiting():
+                buffer += self._port.read()
+            
             if len(buffer) == 0:
                 raise TimeoutException("Communication timeout expired.")
             elif buffer[0] != signal:
-                raise UnexpectedSignalException("Unexpected communication signal received.", buffer[0])
+                raise UnexpectedSignalException("Unexpected communication signal received.", buffer)
             else:
+                self._port.flush()
                 return
 
     def _execute_communication(self, communication_function, failure_message, **args):
@@ -161,7 +192,7 @@ class TXMODEM:
                 communication_function(**args)
                 return
             except UnexpectedSignalException as ex:
-                if ex.get_signal() == self._SIGNAL_CAN:
+                if self._SIGNAL_CAN in ex.get_signal():
                     raise CommunicationException("CAN signal received. Transmission forcefully terminated by receiver.")
             except (TimeoutException, SerialException):
                 pass
@@ -171,20 +202,30 @@ class TXMODEM:
     def _initiate_transmission(self):
         """
         """
-#        self._wait_for_signal(self._SIGNAL_NAK)
-        
+        try:
+            self._wait_for_signal(self._SIGNAL_NAK)
+            if self._callback_update is not None:
+                self._callback_update("XMODEM initialization NAK received.")
+            self._checksum = self._crc_8
+        except UnexpectedSignalException as ex:
+            if self._SIGNAL_CRC16 in ex.get_signal():
+                if self._callback_update is not None:
+                    self._callback_update("XMODEM-CRC initialization 'C' received.")
+                self._checksum = self._crc_16
+            else:
+                raise CommunicationException("Unknown initiation signal received.")    
+    
     def _transmit_block(self, block_index, block):
         """
         """
-        print "%c [%d/%d] %d" % (self._SIGNAL_SOH, block_index & 0xFF, ~block_index & 0xFF, sum(map(ord, block)) & 0xFF)
-        
         for retry in range(10):
             try:
-#                self._port.write("%c%c%c%s%c" % (self._SIGNAL_SOH, chr(block_index), chr(self._ones_compliment(block_index)), block, chr(sum(map(ord, block)) & 0xFF)))
-#                self._wait_for_signal(self._SIGNAL_ACK)
+                self._port.write("%c%c%c%s%s" % (self._SIGNAL_SOH, chr(block_index & 0xFF), chr(~block_index & 0xFF), block, self._checksum(block)))
+                self._port.flush()
+                self._wait_for_signal(self._SIGNAL_ACK)
                 return
             except UnexpectedSignalException as ex:
-                if ex.get_signal() == self._SIGNAL_CAN:
+                if self._SIGNAL_CAN in ex.get_signal():
                     raise CommunicationException("CAN signal received. Transmission forcefully terminated by receiver.")
             except (TimeoutException, SerialException):
                 pass
@@ -194,13 +235,23 @@ class TXMODEM:
     def _terminate_transmission(self):
         """
         """
-#        self._port.write(self._SIGNAL_EOT)
-#        self._wait_for_signal(self._SIGNAL_ACK)
+        if self._callback_update is not None:
+            self._callback_update("Sending EOT signal.")
+        self._port.write(self._SIGNAL_EOT)
+        self._port.flush()
+        
+        self._wait_for_signal(self._SIGNAL_ACK)
+        if self._callback_update is not None:
+            self._callback_update("Received termination ACK.")
+        self._port.flush()
+
                 
     def _shutdown(self):
         """
         """
         if self._port is not None and self._port.isOpen():
+            if self._callback_update is not None:
+                self._callback_update("Shutting down serial port.")
             self._port.close()
         
 class Main:
@@ -257,7 +308,10 @@ class Main:
     Transfer:
       -f, --file    specify the file that will be transfered
      '''
-             
+    
+    def _print_update(self, message):
+        print message
+                
     def run(self):
         """
         """
@@ -298,6 +352,7 @@ class Main:
                 
         try:
             tx_object = TXMODEM(**self._configuration)
+            tx_object.set_callback_update(self._print_update)
             tx_object.send(self._tx_filename)
         except(ConfigurationException, CommunicationException) as ex:
             print "[ERROR] %s" %(ex)        

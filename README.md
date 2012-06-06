@@ -6,6 +6,8 @@ A Python class implementing the XMODEM and XMODEM-CRC send protocol built on top
 Class Object Usage
 ------------------
 ```python
+from txmodem import *
+
 try:
 	TXMODEM(configuration).send(filename)
 except(ConfigurationException, CommunicationException) as ex:
@@ -15,6 +17,10 @@ Command Line Usage
 ------------------
 ```
 python txmodem.py [OPTION]...
+
+or
+
+python -m txmodem.txmodem [OPTION]...
 
 Startup:
  -?, --help    print this help

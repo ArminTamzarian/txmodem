@@ -341,13 +341,13 @@ class Main:
     
     # default port configurations
     _configuration = {
-                     "port" : None,
-                     "baudrate" : 115200,
-                     "bytesize" : EIGHTBITS,
-                     "parity" : PARITY_NONE,
-                     "stopbits" : STOPBITS_ONE,
-                     "timeout" : 10
-                     }
+        "port" : None,
+        "baudrate" : 115200,
+        "bytesize" : EIGHTBITS,
+        "parity" : PARITY_NONE,
+        "stopbits" : STOPBITS_ONE,
+        "timeout" : 10
+    }
     
     _tx_filename = None
         

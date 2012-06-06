@@ -101,7 +101,8 @@ class TXMODEM:
         
         :param configuration: Configuration dictionary for the serial port as defined in the `pySerial API <http://pyserial.sourceforge.net/pyserial_api.html>`_.
         """
-        self.set_configuration(**configuration)
+        if configuration is not None:
+            self.set_configuration(**configuration)
         
     def set_configuration(self, **configuration):
         """
@@ -126,7 +127,7 @@ class TXMODEM:
         if filename is None:
             raise ConfigurationException("No filename specified.")
         
-        if self._configuration["port"] is None:
+        if self._configuration is None or self._configuration["port"] is None:
             raise ConfigurationException("No serial port device specified.")
         
         # Open access to the input file

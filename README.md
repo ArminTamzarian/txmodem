@@ -5,7 +5,7 @@ A Python class implementing the XMODEM and XMODEM-CRC send protocol built on top
 
 Installation
 ------------
-Simply ensure the txmodem.py file is in your PATH or install the package by executing:
+Simply ensure the txmodem.py file is in your PATH or install the module by executing:
 ```
 python setup.py install
 ```
@@ -55,13 +55,17 @@ except(ConfigurationException, CommunicationException) as ex:
 ```
 Command Line Usage
 ------------------
+Ensure the txmodem.py file is executable and enter:
 ```
 python txmodem.py [OPTION]...
-
-or
-
+```
+Alternately if the module has been installed you can execute the main functionality by entering:
+```
 python -m txmodem.txmodem [OPTION]...
-
+```
+Command Line Options
+--------------------
+```
 Startup:
  -?, --help    print this help
  -l, --list    list the available serial port devices

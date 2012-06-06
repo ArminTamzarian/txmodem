@@ -1,0 +1,11 @@
+include CHANGES
+include LICENSE
+include MANIFEST.in
+include README.md
+include setup.py
+
+include txmodem/*.py
+
+include doc/*.rst
+include doc/conf.py
+include doc/Makefile

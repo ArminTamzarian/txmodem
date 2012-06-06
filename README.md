@@ -1,19 +1,19 @@
 TXMODEM
 =======
 
-A Python class implementing the XMODEM and XMODEM-CRC send protocol built on top of `pySerial <http://pyserial.sourceforge.net/>`_.
+A Python class implementing the XMODEM and XMODEM-CRC send protocol built on top of [pySerial](http://pyserial.sourceforge.net/)
 
 Class Object Usage
 ------------------
-
+```python
 try:
 	TXMODEM(configuration).send(filename)
 except(ConfigurationException, CommunicationException) as ex:
     print "[ERROR] %s" % (ex) 
-
+```
 Command Line Usage
 ------------------
-
+```
 python txmodem.py [OPTION]...
 
 Startup:
@@ -27,3 +27,4 @@ Configuration:
 
 Transfer:
  -f, --file    specify the file that will be transfered
+```

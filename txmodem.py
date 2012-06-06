@@ -67,7 +67,7 @@ class UnexpectedSignalException(ExceptionTXMODEM):
 
 class TXMODEM:
     """
-    A Python class implementing the XMODEM and XMODEM-CRC send protocol built on top of PySerial.
+    A Python class implementing the XMODEM and XMODEM-CRC send protocol built on top of `pySerial <http://pyserial.sourceforge.net/>`_.
     """
     
     _SIGNAL_SOH = chr(1)
@@ -97,17 +97,29 @@ class TXMODEM:
     
     def __init__(self, **configuration):
         """
+        TXMODEM constructor.
+        
+        :param configuration: Configuration dictionary for the serial port as defined in the `pySerial API <http://pyserial.sourceforge.net/pyserial_api.html>`_.
         """
         self.set_configuration(**configuration)
         
     def set_configuration(self, **configuration):
         """
+        Set the configuration for the serial device.
+        
+        :param configuration: Configuration dictionary for the serial port as defined in the `pySerial API <http://pyserial.sourceforge.net/pyserial_api.html>`_.
         """
         for k, v in configuration.items():
             self._configuration[k] = v
         
     def send(self, filename):
         """
+        Execute the transmission of the file.
+        
+        :param filename: Filename of the file to transfer.
+        
+        :raises ConfigurationException: Will be raised in the event of an invalid file or port configuration parameter.
+        :raises CommunicationException: Will be raised in the event of an unrecoverable serial communication error.
         """
         
         # Ensure proper preflight configuration
@@ -155,21 +167,33 @@ class TXMODEM:
                   
     def _set_crc_8(self, buffer):
         """
+        Sets the _checksum calculation to _crc_8 for compatibility with _wait_for_signal.
+        
+        :param buffer: Exists for compatibility. Ignored.
         """
         self._checksum = self._crc_8
     
     def _set_crc_16(self, buffer):
         """
+        Sets the _checksum calculation to _crc_16 for compatibility with _wait_for_signal.
+        
+        :param buffer: Exists for compatibility. Ignored.
         """
         self._checksum = self._crc_16
         
     def _crc_8(self, block):
         """
+        Calculates the 8-bit CRC checksum as defined by the original XMODEM specification.
+        
+        :param block: The block for which the checksum will be calculated.
         """
         return chr(sum(map(ord, block)) & 0xFF)
     
     def _crc_16(self, block):
         """
+        Calculates the 8-bit CRC checksum as defined by the original XMODEM-CRC specification.
+        
+        :param block: The block for which the checksum will be calculated.
         """
         crc = 0
         for b in block:
@@ -183,22 +207,29 @@ class TXMODEM:
              
     def _wait_for_signal(self, signals):
         """
+        Waits for a signal to be received and executes a specified callback function.
+        
+        :param signals: A dictionary with expected signals for keys and callback functions for values of the signature *function(buffer)*. 
         """
-        while True:
-            buffer = self._port.read()
-            while self._port.inWaiting():
-                buffer += self._port.read()
-            self._port.flush()
-            
-            if len(buffer) == 0:
-                raise TimeoutException("Communication timeout expired.")
-            elif buffer[0] in signals and signals[buffer[0]] is not None:
-                signals[buffer[0]](buffer)
-            else:
-                raise UnexpectedSignalException("Unexpected communication signal received.", buffer)
+        buffer = self._port.read()
+        while self._port.inWaiting():
+            buffer += self._port.read()
+        self._port.flush()
+        
+        if len(buffer) == 0:
+            raise TimeoutException("Communication timeout expired.")
+        elif buffer[0] in signals and signals[buffer[0]] is not None:
+            signals[buffer[0]](buffer)
+        else:
+            raise UnexpectedSignalException("Unexpected communication signal received.", buffer)
 
     def _execute_communication(self, communication_function, failure_message, **args):
         """
+        Abstract function to execute communication methods within the XMODEM error correction framework.
+        
+        :param communication_function: Communication function to execute within the error correction framework.
+        :param failure_message: Failure message to raise along with the exception if applicable.
+        :param args: Arguments to pass to the supplied communication_function.
         """
         for retry in range(self._RETRY_COUNT):
             try:
@@ -214,21 +245,22 @@ class TXMODEM:
             
     def _initiate_transmission(self):
         """
+        Initiates the transmission while automatically selecting between XMODEM and XMODEM-CRC modes.
         """
         try:
             self._wait_for_signal({
                  self._SIGNAL_NAK : self._crc_8,
                  self._SIGNAL_CRC16 : self._crc_16
             })
-            self._checksum = self._crc_8
         except UnexpectedSignalException as ex:
-            if self._SIGNAL_CRC16 in ex.get_signal():
-                self._checksum = self._crc_16
-            else:
-                raise CommunicationException("Unknown initiation signal received.")    
+            raise CommunicationException("Unknown initiation signal received.")    
     
     def _transmit_block(self, block_index, block):
         """
+        Transmits the specified block of data.
+        
+        :param block_index: Index of the block to be transmitted.
+        :param block: Buffered block of data to be transmitted.
         """
         try:
             self._port.write("%c%c%c%s%s" % (self._SIGNAL_SOH, chr(block_index & 0xFF), chr(~block_index & 0xFF), block, self._checksum(block)))
@@ -243,6 +275,7 @@ class TXMODEM:
             
     def _terminate_transmission(self):
         """
+        Terminates the XMODEM transmission.
         """
         self._port.write(self._SIGNAL_EOT)
         self._port.flush()
@@ -254,7 +287,7 @@ class Main:
     """
     A Python Main-style class for command line execution of the TXMODEM functionality.
     
-    :Example
+    :Example:
     ``python txmodem.py --file [filename] --port [port]``
     """
 
@@ -275,6 +308,7 @@ class Main:
         
     def _list_ports(self):
         """
+        Lists the accessible serial devices and their associated system names.
         """
         print "Currently available ports:"
         print "--------------------------"
@@ -283,14 +317,16 @@ class Main:
     
     def _usage(self):
         """
+        Prints the usage information for command line execution.
         """
         print '''\
     XMODEM transfer utility
     
-    Usage: txmodem.py [OPTION]...'''
+    Usage: python txmodem.py [OPTION]...'''
     
     def _help(self): 
         """
+        Prints the usage and help information for command line execution.
         """
         self._usage()
         
@@ -310,6 +346,7 @@ class Main:
                     
     def run(self):
         """
+        Main function to initiate execution of the class.
         """
         # scan arguments for options    
         try:

@@ -5,11 +5,27 @@ A Python class implementing the XMODEM and XMODEM-CRC send protocol built on top
 
 Class Object Usage
 ------------------
+
+Usage which automatically creates and closes the serial port with each call to TXMODEM.send():
 ```python
 from txmodem import *
 
 try:
-	TXMODEM(configuration).send(filename)
+	TXMODEM.from_configuration(**configuration).send(filename)
+except(ConfigurationException, CommunicationException) as ex:
+    print "[ERROR] %s" % (ex) 
+```
+
+Usage which uses a preconfigured pySerial Serial object which leaves the object opened after each call to TXMODEM.send():
+```python
+from txmodem import *
+from serial import *
+
+try:
+	serial_object = Serial(**configuration)
+	TXMODEM.from_serial(serial_object).send(filename)
+	serial_object.write("FOO")
+	serial_object.close()
 except(ConfigurationException, CommunicationException) as ex:
     print "[ERROR] %s" % (ex) 
 ```

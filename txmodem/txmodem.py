@@ -44,48 +44,99 @@ class UnexpectedSignalException(ExceptionTXMODEM):
 class TXMODEM:
     """
     A Python class implementing the XMODEM and XMODEM-CRC send protocol built on top of `pySerial <http://pyserial.sourceforge.net/>`_.
+    
+    .. note:: TXMODEM objects should not utilize the :py:meth:`__init__` constructor and should instead be created via the :py:meth:`from_configuration` and :py:meth:`from_serial` methods.
     """
     
-    _SIGNAL_SOH = chr(1)
-    _SIGNAL_EOT = chr(4)
-    _SIGNAL_ACK = chr(6)
-    _SIGNAL_NAK = chr(21)
-    _SIGNAL_CAN = chr(24)
+    # XMODEM standard defined parameters
+    _SIGNAL_SOH   = chr(1)
+    _SIGNAL_EOT   = chr(4)
+    _SIGNAL_ACK   = chr(6)
+    _SIGNAL_NAK   = chr(21)
+    _SIGNAL_CAN   = chr(24)
     _SIGNAL_CRC16 = chr(67)
     
-    _BLOCK_SIZE = 128
-    _RETRY_COUNT = 10
+    _BLOCK_SIZE   = 128
+    _RETRY_COUNT  = 10
+    
+    _PADDING_BYTE = chr(26)
     
     # default port configurations
     _configuration = {
-                     "port" : None,
-                     "baudrate" : 115200,
-                     "bytesize" : EIGHTBITS,
-                     "parity" : PARITY_NONE,
-                     "stopbits" : STOPBITS_ONE,
-                     "timeout" : 10
-                     }
+        "port"     : None,
+        "baudrate" : 115200,
+        "bytesize" : EIGHTBITS,
+        "parity"   : PARITY_NONE,
+        "stopbits" : STOPBITS_ONE,
+        "timeout"  : 10
+    }
 
+    # the pySerial port object
     _port = None
-    _checksum = None
     
-    def __init__(self, **configuration):
+    # checksum calculation function
+    _checksum = None
+
+    # hooks for event callbacks
+    EVENT_INITIALIZATION = 0
+    """
+    Event to be fired on initialization.
+    
+    ``function()``
+    """
+    EVENT_BLOCK_SENT     = 1
+    """
+    Event to be fired on a block sent.
+    
+    ``function(block_index, number_of_blocks)``
+    """
+    EVENT_TERMIATION     = 2
+    """
+    Event to be fired on termination.
+    
+    ``function()``
+    """
+    
+    _event_callbacks = {
+        EVENT_INITIALIZATION : [],
+        EVENT_BLOCK_SENT     : [],
+        EVENT_TERMIATION     : [],
+    }
+        
+    @classmethod
+    def from_configuration(cls, **configuration):
         """
-        TXMODEM constructor.
+        Class level static method for constructing the TXMODEM object from a set of configuration parameters.
         
         :param configuration: Configuration dictionary for the serial port as defined in the `pySerial API <http://pyserial.sourceforge.net/pyserial_api.html>`_.
-        """
-        if configuration is not None:
-            self.set_configuration(**configuration)
         
-    def set_configuration(self, **configuration):
+        .. note:: If using this construction method the internal port object will be created and closed for each call to :py:meth:`send`.
         """
-        Set the configuration for the serial device.
-        
-        :param configuration: Configuration dictionary for the serial port as defined in the `pySerial API <http://pyserial.sourceforge.net/pyserial_api.html>`_.
-        """
+        cls_obj = cls()
         for k, v in configuration.items():
-            self._configuration[k] = v
+            cls_obj._configuration[k] = v
+        return cls_obj
+
+    @classmethod
+    def from_serial(cls, serial):
+        """
+        Class level static method for constructing the TXMODEM object from a pySerial Serial object.
+        
+        :param port: A preconfigured pySerial Serial object.
+        
+        .. note:: If using this construction method the internal port object will not be reopened and shut down for each call to :py:meth:`send`.
+        """
+        cls_obj = cls()
+        cls._port = serial
+        return cls_obj
+                            
+    def add_callback(self, event_type, callback):
+        """
+        Add a callback for the specified event.
+        
+        :param event_type: Type of the event which should be one of the types: :py:const:`EVENT_INITIALIZATION`, :py:const:`EVENT_BLOCK_SENT`, or :py:const:`EVENT_TERMIATION`
+        """
+        self._event_callbacks[event_type].append(callback)
         
     def send(self, filename):
         """
@@ -101,7 +152,10 @@ class TXMODEM:
         if filename is None:
             raise ConfigurationException("No filename specified.")
         
-        if self._configuration is None or self._configuration["port"] is None:
+        create_port = True
+        if self._port != None:
+            create_port = False 
+        elif self._configuration is None or self._configuration["port"] is None:
             raise ConfigurationException("No serial port device specified.")
         
         # Open access to the input file
@@ -111,24 +165,27 @@ class TXMODEM:
         except IOError:
             raise ConfigurationException("Unable to access input filename '%s'." % (filename))
         
-        # Open access to the serial device
-        try:
-            self._port = Serial(**self._configuration)
-        except ValueError:
-            raise ConfigurationException("Invalid value for configuration parameters.")
-        except SerialException:
-            raise ConfigurationException("Unable to open serial device '%s' with specified parameters." % (configuration["port"]))
+        # Open access to the serial device if necessary
+        if create_port is True:
+            try:
+                self._port = Serial(**self._configuration)
+            except ValueError:
+                raise ConfigurationException("Invalid value for configuration parameters.")
+            except SerialException:
+                raise ConfigurationException("Unable to open serial device '%s' with specified parameters." % (configuration["port"]))
 
         try:            
             self._port.flush()
             self._execute_communication(self._initiate_transmission, "Unable to receive initial NAK.")            
 
-            for i in range(1,  int(math.ceil(os.path.getsize(filename) / self._BLOCK_SIZE)) + 1):
+            number_of_blocks = int(math.ceil(os.path.getsize(filename) / self._BLOCK_SIZE))
+            for i in range(1, number_of_blocks + 1):
                 block = input_file.read(self._BLOCK_SIZE)
                 if block:
                     if len(block) < self._BLOCK_SIZE:
-                        block += chr(0) * (self._BLOCK_SIZE - len(block))
+                        block += self._PADDING_BYTE * (self._BLOCK_SIZE - len(block))
                     self._execute_communication(self._transmit_block, "Maximum number of transmission retries exceeded.", **{"block_index": i, "block": block})            
+                    self._trigger_callbacks(self.EVENT_BLOCK_SENT, **{"block_index" : i, "number_of_blocks" : number_of_blocks})
                     
             self._execute_communication(self._terminate_transmission, "Maximum number of termination retries exceeded.")
         except IOError:
@@ -137,9 +194,20 @@ class TXMODEM:
             # Always remember to clean up after yourself
             input_file.close()
             
-            if self._port is not None and self._port.isOpen():
+            if create_port and self._port is not None and self._port.isOpen():
                 self._port.close()
-                  
+                self._port = None
+                
+    def _trigger_callbacks(self, event_type, **args):
+        """
+        Trigger all callbacks for the given event type.
+        
+        :param event_type: Type of the event which should be one of the types: :py:const:`EVENT_INITIALIZATION`, :py:const:`EVENT_BLOCK_SENT`, or :py:const:`EVENT_TERMIATION`
+        :param args" Arguments to pass to the callback function 
+        """
+        for event in self._event_callbacks[event_type]:
+            event(**args)
+                         
     def _set_crc_8(self, buffer):
         """
         Sets the _checksum calculation to _crc_8 for compatibility with _wait_for_signal.
@@ -193,8 +261,9 @@ class TXMODEM:
         
         if len(buffer) == 0:
             raise TimeoutException("Communication timeout expired.")
-        elif buffer[0] in signals and signals[buffer[0]] is not None:
-            signals[buffer[0]](buffer)
+        elif buffer[0] in signals.keys():
+            if signals[buffer[0]] is not None:
+                signals[buffer[0]](buffer)
         else:
             raise UnexpectedSignalException("Unexpected communication signal received.", buffer)
 
@@ -224,9 +293,10 @@ class TXMODEM:
         """
         try:
             self._wait_for_signal({
-                 self._SIGNAL_NAK : self._crc_8,
-                 self._SIGNAL_CRC16 : self._crc_16
+                 self._SIGNAL_NAK : self._set_crc_8,
+                 self._SIGNAL_CRC16 : self._set_crc_16
             })
+            self._trigger_callbacks(self.EVENT_INITIALIZATION)
         except UnexpectedSignalException as ex:
             raise CommunicationException("Unknown initiation signal received.")    
     
@@ -239,7 +309,6 @@ class TXMODEM:
         """
         try:
             self._port.write("%c%c%c%s%s" % (self._SIGNAL_SOH, chr(block_index & 0xFF), chr(~block_index & 0xFF), block, self._checksum(block)))
-            self._port.flush()
             self._wait_for_signal({self._SIGNAL_ACK: None})
             return
         except UnexpectedSignalException as ex:
@@ -253,17 +322,18 @@ class TXMODEM:
         Terminates the XMODEM transmission.
         """
         self._port.write(self._SIGNAL_EOT)
-        self._port.flush()
-        
         self._wait_for_signal({self._SIGNAL_ACK: None})
         self._port.flush()
+        
+        self._trigger_callbacks(self.EVENT_TERMIATION)
         
 class Main:
     """
     A Python Main-style class for command line execution of the TXMODEM functionality.
     
-    :Example:
-    ``python txmodem.py --file [filename] --port [port]``
+    :Examples:
+    - ``python txmodem.py --file [filename] --port [port]``
+    - ``python -m txmodem.txmodem --file [filename] --port [port]``
     """
 
     _EXIT_OK = 0
@@ -280,6 +350,12 @@ class Main:
                      }
     
     _tx_filename = None
+        
+    def __init__(self):
+        """
+        Main class constructor.
+        """
+        sys.exit(self._run())
         
     def _list_ports(self):
         """
@@ -318,8 +394,17 @@ class Main:
     Transfer:
       -f, --file    specify the file that will be transfered
      '''
-                    
-    def run(self):
+    
+    def _callback_initialized(self):
+        print "Transfer initialization complete."
+        
+    def _callback_block_sent(self, block_index, number_of_blocks):
+        print "Sent block [ %d / %d ]" % (block_index, number_of_blocks)
+        
+    def _callback_terminated(self):
+        print "Transfer successfully terminated."
+                        
+    def _run(self):
         """
         Main function to initiate execution of the class.
         """
@@ -359,7 +444,13 @@ class Main:
                 self._tx_filename = a
                 
         try:
-            TXMODEM(**self._configuration).send(self._tx_filename)
+            tx_object = TXMODEM.from_configuration(**self._configuration)
+            
+            tx_object.add_callback(TXMODEM.EVENT_INITIALIZATION, self._callback_initialized)
+            tx_object.add_callback(TXMODEM.EVENT_BLOCK_SENT, self._callback_block_sent)
+            tx_object.add_callback(TXMODEM.EVENT_TERMIATION, self._callback_terminated)
+            
+            tx_object.send(self._tx_filename)
         except(ConfigurationException, CommunicationException) as ex:
             print "[ERROR] %s" %(ex)        
         except(KeyboardInterrupt, SystemExit):
@@ -368,4 +459,4 @@ class Main:
         return self._EXIT_OK
 
 if __name__ == "__main__":
-    sys.exit(Main().run())
+    Main()
